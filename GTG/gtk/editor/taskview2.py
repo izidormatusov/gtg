@@ -22,7 +22,7 @@
 import re
 from time import time
 
-from gi.repository import Gtk, GLib, Gdk
+from gi.repository import Gtk, GLib, Gdk, GObject
 
 from GTG.core.logger import log
 from GTG.core.requester import Requester
@@ -32,7 +32,8 @@ from gettext import gettext as _
 from typing import List
 
 from GTG.gtk.editor.text_tags import (TitleTag, SubTaskTag, InvisibleTag,
-                                      TaskTagTag, InternalLinkTag, LinkTag)
+                                      TaskTagTag, InternalLinkTag, LinkTag,
+                                      CheckboxTag)
 
 
 # Regex to find GTG's tags
@@ -119,6 +120,7 @@ class TaskView(Gtk.TextView):
     # process() to determine which subtasks we have to delete from the task.
     subtasks = {
         'tags': [],
+        'texttags': {},
         'to_delete': []
     }
 
@@ -144,6 +146,11 @@ class TaskView(Gtk.TextView):
         # Add title tag
         self.title_tag = TitleTag()
         self.table.add(self.title_tag)
+
+        self.checkbox_tag = CheckboxTag()
+        self.table.add(self.checkbox_tag)
+
+        self.subs = {}
 
         # Signals and callbacks
         self.id_modified = self.buffer.connect('changed', self.on_modified)
@@ -193,6 +200,7 @@ class TaskView(Gtk.TextView):
                 continue
 
             if self.detect_subtasks(text, start):
+                start = self.add_checkbox(start)
                 start.forward_line()
                 continue
 
@@ -229,7 +237,8 @@ class TaskView(Gtk.TextView):
         """Detect a subtask line. Returns True if a subtask was found."""
 
         if not text.startswith('- '):
-            return False
+            if not start.has_tag(self.checkbox_tag):
+                return False
 
         subtask_title = text[2:]
 
@@ -238,22 +247,28 @@ class TaskView(Gtk.TextView):
             return True
 
         # Tag initial line as invisible
-        invisible_end = start.copy()
-        invisible_end.forward_chars(2)
+        # invisible_end = start.copy()
+        # invisible_end.forward_chars(2)
 
-        invisible_tag = InvisibleTag()
-        self.table.add(invisible_tag)
-        self.buffer.apply_tag(invisible_tag, start, invisible_end)
+        # invisible_tag = InvisibleTag()
+        # self.table.add(invisible_tag)
+        # self.buffer.apply_tag(invisible_tag, start, invisible_end)
 
         # Move beyond invisible tag
-        start.forward_chars(2)
+        # start.forward_chars(2)
 
         end = start.copy()
         end.forward_to_line_end()
 
         # If it starts with a tag, store the tid and name
+        in_start = start.copy()
+
         if start.starts_tag():
-            tag = start.get_tags()[0]
+
+            if start.has_tag(self.checkbox_tag):
+                in_start.forward_char()
+
+            tag = in_start.get_tags()[0]
             tid = tag.tid
 
             if type(tag) is SubTaskTag:
@@ -271,9 +286,67 @@ class TaskView(Gtk.TextView):
         task = self.req.get_task(tid)
         subtask_tag = SubTaskTag(task)
         self.table.add(subtask_tag)
-        self.buffer.apply_tag(subtask_tag, start, end)
+        self.buffer.apply_tag(subtask_tag, in_start, end)
+        subtask_tag.refresh(task.status)
 
+        self.subtasks['texttags'][tid] = subtask_tag
         return True
+
+
+    def on_checkbox_toggle(self, task) -> None:
+
+        task.toggle_status()
+        self.subtasks['texttags'][task.tid].refresh(task.status)
+
+
+    def add_checkbox(self, start: Gtk.TextIter) -> Gtk.TextIter:
+        """Add a checkbox."""
+
+        try:
+            tag = start.get_tags()[0]
+        except IndexError:
+            return start
+
+        if type(tag) is CheckboxTag:
+            return start
+
+        # Get offset
+        initial_offset = start.get_offset()
+
+        # Remove the -
+        delete_end = start.copy()
+        delete_end.forward_chars(2)
+        self.buffer.delete(start, delete_end)
+
+        # Grab task
+
+        task = self.req.get_task(tag.tid)
+
+        # Add a fancy checkbox. This will invalidate all iterators.
+        checkbox = Gtk.CheckButton.new()
+        checkbox.connect('toggled', lambda _: self.on_checkbox_toggle(task))
+        checkbox.set_can_focus(False)
+
+
+        # # # Keep a copy of this iter to add a checkbox
+        # initial_offset = start.get_offset()
+
+        with GObject.signal_handler_block(self.buffer, self.id_modified):
+            anchor = self.buffer.create_child_anchor(start)
+            self.add_child_at_anchor(checkbox, anchor)
+
+        # # # self.checkboxes.append(anchor)
+
+        # # # Apply the immutrable tag to prevent the user from deleting it
+        checkbox_start = self.buffer.get_iter_at_offset(initial_offset)
+        checkbox_end = checkbox_start.copy()
+        checkbox_end.forward_chars(1)
+
+        self.buffer.apply_tag(self.checkbox_tag, checkbox_start, checkbox_end)
+        checkbox.show()
+        self.buffer.set_modified(False)
+
+        return checkbox_end
 
 
     def detect_tag(self, text: str, start: Gtk.TextIter) -> None:

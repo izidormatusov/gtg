@@ -27,6 +27,15 @@ from GTG.core.requester import Requester
 from webbrowser import open as openurl
 
 
+class CheckboxTag(Gtk.TextTag):
+    """Subtask Text tag."""
+
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.set_property('left-margin', 40)
+
+
 class SubTaskTag(Gtk.TextTag):
     """Subtask Text tag."""
 
@@ -38,16 +47,18 @@ class SubTaskTag(Gtk.TextTag):
 
         self.set_property('background', 'white')
         self.set_property('underline', Pango.Underline.SINGLE)
-        self.set_property('left-margin', 40)
 
-        if task.status == Task.STA_ACTIVE:
+        self.connect('event', self.on_tag)
+
+
+    def refresh(self, status) -> None:
+
+        if status == Task.STA_ACTIVE:
             self.set_property('strikethrough', False)
             self.set_property('foreground', '#007bff')
         else:
             self.set_property('strikethrough', True)
             self.set_property('foreground', 'gray')
-
-        self.connect('event', self.on_tag)
 
 
     def on_tag(self, tag, view, event, _iter) -> None:
